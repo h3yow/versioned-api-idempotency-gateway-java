@@ -38,13 +38,21 @@ public class IdempotencyStore {
         return records.replace(key, expected, next);
     }
 
-    /** 移除记录（失败后重试前清空旧终态）。 */
-    public void remove(String key, IdempotencyRecord expected) {
-        records.remove(key, expected);
+    /** 移除记录（失败后重试前清空旧终态 / 清理器淘汰）；返回是否确实移除。 */
+    public boolean remove(String key, IdempotencyRecord expected) {
+        return records.remove(key, expected);
     }
 
     public int size() {
         return records.size();
+    }
+
+    /**
+     * 当前全部记录的快照（键 -> 记录），供清理器遍历；
+     * 遍历时记录可能已被并发修改，清理动作必须在键锁内重新读取后再执行。
+     */
+    public java.util.List<java.util.Map.Entry<String, IdempotencyRecord>> entries() {
+        return java.util.List.copyOf(records.entrySet());
     }
 
     public void clear() {

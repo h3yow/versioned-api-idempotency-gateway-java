@@ -63,7 +63,9 @@ public class VersionNegotiator {
                     "精确命中注册版本 " + exact.version().asString());
         }
 
-        // 同主版本向前兼容：选择 minor 不小于声明值的最高注册、且未退役的版本。
+        // 同主版本内未精确命中：落到主版本内兼容的处理方式，不直接拒绝。
+        // 优先选择 minor 不高于声明值的最高注册版本（向后兼容：客户端能处理其子集）；
+        // 若声明值低于所有注册版本，则选择 minor 高于声明值的最低注册版本（向前兼容）。
         List<VersionDescriptor> serviceable = sameMajor.stream()
                 .filter(d -> d.status() != VersionStatus.UNSUPPORTED)
                 .toList();
@@ -71,18 +73,28 @@ public class VersionNegotiator {
             return reject(requested, ErrorCode.VERSION_INCOMPATIBLE,
                     "主版本 " + requested.major() + " 已整体停止服务；主版本之间互不兼容，请升级客户端");
         }
-        VersionDescriptor fallback = serviceable.stream()
-                .filter(d -> d.version().minor() >= requested.minor())
+        VersionDescriptor backward = serviceable.stream()
+                .filter(d -> d.version().minor() <= requested.minor())
                 .max(Comparator.comparing(VersionDescriptor::version))
                 .orElse(null);
-        if (fallback == null) {
+        if (backward != null) {
+            return accept(backward, requested,
+                    "同主版本向后兼容：" + requested.asString() + " -> "
+                            + backward.version().asString() + "（未单独登记的次版本落到主版本内兼容处理）");
+        }
+        VersionDescriptor forward = serviceable.stream()
+                .filter(d -> d.version().minor() > requested.minor())
+                .min(Comparator.comparing(VersionDescriptor::version))
+                .orElse(null);
+        if (forward == null) {
+            // 防御性分支：serviceable 非空且未精确命中时必然存在兼容落点
             return reject(requested, ErrorCode.VERSION_UNKNOWN,
                     "版本 " + requested.asString() + " 未在服务端注册，且主版本 "
-                            + requested.major() + " 内无向前兼容路径");
+                            + requested.major() + " 内无兼容路径");
         }
-        return accept(fallback, requested,
+        return accept(forward, requested,
                 "同主版本向前兼容：" + requested.asString() + " -> "
-                        + fallback.version().asString());
+                        + forward.version().asString() + "（未单独登记的次版本落到主版本内兼容处理）");
     }
 
     private VersionDecision accept(VersionDescriptor descriptor, ApiVersion requested, String reason) {

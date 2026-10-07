@@ -4,7 +4,6 @@ import com.github.h3yow.versionedapiidempotencygatewayjava.common.RequestContext
 import com.github.h3yow.versionedapiidempotencygatewayjava.gateway.GatewayResult;
 import com.github.h3yow.versionedapiidempotencygatewayjava.gateway.GatewayService;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderRequest;
-import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,19 +36,19 @@ public class OrderController {
     }
 
     @PostMapping("/api/orders")
-    public ResponseEntity<CreateOrderResponse> create(
+    public ResponseEntity<Object> create(
             @RequestHeader(value = "X-Api-Version", required = false) String version,
             @RequestHeader(value = "X-Client-Id", required = false) String clientId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-Request-Id", required = false) String clientRequestId,
             @RequestBody(required = false) CreateOrderRequest request) {
         RequestContext context = toContext(version, clientId, idempotencyKey, clientRequestId);
-        GatewayResult<CreateOrderResponse> result = gatewayService.createOrder(context, request);
+        GatewayResult<Object> result = gatewayService.createOrder(context, request);
         return ResponseEntity.ok().headers(commonHeaders(context, result)).body(result.body());
     }
 
     @GetMapping("/api/orders/{orderId}")
-    public ResponseEntity<CreateOrderResponse> get(
+    public ResponseEntity<Object> get(
             @RequestHeader(value = "X-Api-Version", required = false) String version,
             @RequestHeader(value = "X-Client-Id", required = false) String clientId,
             @RequestHeader(value = "X-Request-Id", required = false) String clientRequestId,
@@ -62,7 +61,7 @@ public class OrderController {
                         .build());
     }
 
-    private static HttpHeaders commonHeaders(RequestContext context, GatewayResult<?> result) {
+    static HttpHeaders commonHeaders(RequestContext context, GatewayResult<?> result) {
         HttpHeaders headers = new HttpHeaders();
         headers.add("X-Request-Id", context.requestId());
         headers.add("X-Api-Version-Selected", result.selectedVersion());

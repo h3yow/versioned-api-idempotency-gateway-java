@@ -15,6 +15,7 @@ import com.github.h3yow.versionedapiidempotencygatewayjava.idempotency.Idempoten
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.OrderService;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderRequest;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResponse;
+import com.github.h3yow.versionedapiidempotencygatewayjava.order.view.OrderViewRouter;
 import com.github.h3yow.versionedapiidempotencygatewayjava.version.VersionDecision;
 import com.github.h3yow.versionedapiidempotencygatewayjava.version.VersionNegotiator;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,7 @@ public class GatewayService {
     private final VersionNegotiator versionNegotiator;
     private final IdempotencyService idempotencyService;
     private final OrderService orderService;
+    private final OrderViewRouter orderViewRouter;
     private final AuditLogger auditLogger;
 
     public GatewayService(AuthorizationService authorizationService,
@@ -46,19 +48,21 @@ public class GatewayService {
                           VersionNegotiator versionNegotiator,
                           IdempotencyService idempotencyService,
                           OrderService orderService,
+                          OrderViewRouter orderViewRouter,
                           AuditLogger auditLogger) {
         this.authorizationService = authorizationService;
         this.clientDirectory = clientDirectory;
         this.versionNegotiator = versionNegotiator;
         this.idempotencyService = idempotencyService;
         this.orderService = orderService;
+        this.orderViewRouter = orderViewRouter;
         this.auditLogger = auditLogger;
     }
 
     /**
      * 创建订单（写能力）：强制幂等键；失败时抛出 {@link ApiException} 由入口统一映射。
      */
-    public GatewayResult<CreateOrderResponse> createOrder(RequestContext context, CreateOrderRequest request) {
+    public GatewayResult<Object> createOrder(RequestContext context, CreateOrderRequest request) {
         // 1) 鉴权（认证 + 写能力范围）
         ClientProfile client = requireAuthenticated(context);
         AuthDecision scopeDecision =
@@ -108,7 +112,8 @@ public class GatewayService {
                         versionDecision.reason(), idem.outcome().name(),
                         scopeDecision.reason(), "SUCCESS:" + idem.value().orderId(),
                         System.currentTimeMillis()));
-                return new GatewayResult<>(idem.value(),
+                Object view = orderViewRouter.shape(versionDecision.selected(), idem.value());
+                return new GatewayResult<>(view,
                         versionDecision.selectedStatus() == com.github.h3yow.versionedapiidempotencygatewayjava.version.VersionStatus.DEPRECATED,
                         versionDecision.sunset(),
                         versionDecision.selected().asString(),
@@ -121,7 +126,7 @@ public class GatewayService {
     /**
      * 查询订单（读能力）：未授权一律以“资源不存在”回应，不泄露资源是否存在。
      */
-    public Optional<GatewayResult<CreateOrderResponse>> getOrder(RequestContext context, String orderId) {
+    public Optional<GatewayResult<Object>> getOrder(RequestContext context, String orderId) {
         ClientProfile client = requireAuthenticated(context);
         AuthDecision scopeDecision =
                 authorizationService.authorize(client, SCOPE_ORDER_READ);
@@ -146,7 +151,8 @@ public class GatewayService {
                 versionDecision.reason(), "N/A", scopeDecision.reason(),
                 found.map(r -> "SUCCESS:" + r.orderId()).orElse("NOT_FOUND:" + orderId),
                 System.currentTimeMillis()));
-        return found.map(body -> new GatewayResult<>(body,
+        return found.map(body -> new GatewayResult<>(
+                orderViewRouter.shape(versionDecision.selected(), body),
                 versionDecision.selectedStatus() == com.github.h3yow.versionedapiidempotencygatewayjava.version.VersionStatus.DEPRECATED,
                 versionDecision.sunset(),
                 versionDecision.selected().asString(),

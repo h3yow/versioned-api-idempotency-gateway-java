@@ -26,8 +26,9 @@ import java.util.concurrent.ConcurrentMap;
 @Component
 public class VersionRegistry {
 
+    // 注意：该提示会作为 Sunset 响应头传输，必须保持 ASCII（HTTP 头值不允许非 Latin-1 字符）
     private static final String SUNSET_1_0 =
-            "Sunset: 2027-06-30; 请迁移至 2.x 或 3.x（同一业务能力）";
+            "2027-06-30; please migrate to 2.x or 3.x (same capability)";
 
     private final ConcurrentMap<String, NavigableMap<ApiVersion, VersionDescriptor>> tables =
             new ConcurrentHashMap<>();
