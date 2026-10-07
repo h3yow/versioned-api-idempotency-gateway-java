@@ -16,10 +16,10 @@ import java.util.List;
  *     <li>缺失 X-Api-Version -> {@link ErrorCode#VERSION_MISSING}；</li>
  *     <li>版本格式无法解析，或该主版本系列对本能力完全未知 -> {@link ErrorCode#VERSION_UNKNOWN}；</li>
  *     <li>主版本系列已知，但该主版本已整体退役（跨主版本不兼容）
- *         或声明的 minor 无任何已注册路径 -> {@link ErrorCode#VERSION_INCOMPATIBLE}
- *         / {@link ErrorCode#VERSION_UNKNOWN}（见具体分支）；</li>
+ *         -> {@link ErrorCode#VERSION_INCOMPATIBLE}；</li>
  *     <li>精确命中：直接选用该版本；已弃用版本附带弃用与日落信号但仍服务；</li>
- *     <li>同主版本内未精确命中：向前兼容选择 minor 不小于声明值的最高注册版本。</li>
+ *     <li>同主版本内未精确命中（次版本未单独登记）：不直接拒绝，回落到该主版本内
+ *         最高的可服务注册版本，即该主版本的兼容处理路径。</li>
  * </ol>
  */
 @Component
@@ -63,7 +63,9 @@ public class VersionNegotiator {
                     "精确命中注册版本 " + exact.version().asString());
         }
 
-        // 同主版本向前兼容：选择 minor 不小于声明值的最高注册、且未退役的版本。
+        // 同主版本兼容：未单独登记的次版本不直接拒绝，落到该主版本内最高的可服务注册版本。
+        // 这保证同主版本内“声明一个没有单独登记的次版本”也有确定的兼容处理路径；
+        // 主版本是否可服务由上一步（是否存在非退役版本）判定，跨主版本不兼容仍稳定拒绝。
         List<VersionDescriptor> serviceable = sameMajor.stream()
                 .filter(d -> d.status() != VersionStatus.UNSUPPORTED)
                 .toList();
@@ -72,17 +74,13 @@ public class VersionNegotiator {
                     "主版本 " + requested.major() + " 已整体停止服务；主版本之间互不兼容，请升级客户端");
         }
         VersionDescriptor fallback = serviceable.stream()
-                .filter(d -> d.version().minor() >= requested.minor())
                 .max(Comparator.comparing(VersionDescriptor::version))
-                .orElse(null);
-        if (fallback == null) {
-            return reject(requested, ErrorCode.VERSION_UNKNOWN,
-                    "版本 " + requested.asString() + " 未在服务端注册，且主版本 "
-                            + requested.major() + " 内无向前兼容路径");
-        }
+                .orElseThrow();
+        String relation = fallback.version().minor() >= requested.minor()
+                ? "同主版本向前兼容："
+                : "同主版本兼容落点（声明次版本高于已注册，回落到该主版本受支持路径）：";
         return accept(fallback, requested,
-                "同主版本向前兼容：" + requested.asString() + " -> "
-                        + fallback.version().asString());
+                relation + requested.asString() + " -> " + fallback.version().asString());
     }
 
     private VersionDecision accept(VersionDescriptor descriptor, ApiVersion requested, String reason) {

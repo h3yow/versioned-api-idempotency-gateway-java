@@ -9,7 +9,7 @@ import com.github.h3yow.versionedapiidempotencygatewayjava.gateway.GatewayServic
 import com.github.h3yow.versionedapiidempotencygatewayjava.idempotency.IdempotencyStore;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.OrderService;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderRequest;
-import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResponse;
+import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -103,7 +103,7 @@ class AuthorizationTest {
         // 先用有权限客户端创建一个真实订单
         RequestContext owner = new RequestContext("req-auth-owner", "2.0",
                 "client-mobile-1", "k-owner");
-        CreateOrderResponse created = gatewayService.createOrder(owner, sampleRequest()).body();
+        CreateOrderResult created = gatewayService.createOrder(owner, sampleRequest()).body();
         log.info("[test-auth] 已创建真实订单 orderId={}", created.orderId());
 
         RequestContext denied = new RequestContext("req-auth-4", "2.0",

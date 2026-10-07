@@ -26,8 +26,12 @@ import java.util.concurrent.ConcurrentMap;
 @Component
 public class VersionRegistry {
 
+    /**
+     * 合规的 Sunset 头内容（RFC 8594 日期 + 迁移提示）。只使用 ASCII：
+     * 真实 Servlet 容器（Tomcat）会拒绝/丢弃含非 ASCII 字符的响应头值。
+     */
     private static final String SUNSET_1_0 =
-            "Sunset: 2027-06-30; 请迁移至 2.x 或 3.x（同一业务能力）";
+            "Wed, 30 Jun 2027 00:00:00 GMT; migrate to 2.x or 3.x (same capability: orders)";
 
     private final ConcurrentMap<String, NavigableMap<ApiVersion, VersionDescriptor>> tables =
             new ConcurrentHashMap<>();

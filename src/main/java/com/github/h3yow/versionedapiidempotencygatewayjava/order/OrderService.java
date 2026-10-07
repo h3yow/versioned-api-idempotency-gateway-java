@@ -3,9 +3,12 @@ package com.github.h3yow.versionedapiidempotencygatewayjava.order;
 import com.github.h3yow.versionedapiidempotencygatewayjava.common.ApiException;
 import com.github.h3yow.versionedapiidempotencygatewayjava.common.ErrorCode;
 import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderRequest;
-import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResponse;
+import com.github.h3yow.versionedapiidempotencygatewayjava.order.dto.CreateOrderResult;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,15 +21,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>{@link #sideEffectCount()} 记录真实副作用次数，供测试断言“仅发生一次”。
  * 业务规则：数量必须为正；商品名 "forbidden-product" 触发可解释的业务异常
  * （用于失败后重试场景，失败本身不产生副作用）。
+ *
+ * <p>产生的是与对外版本无关的完整结果 {@link CreateOrderResult}；精简/扩展返回
+ * 由 OrderResponsePresenter 按协商版本渲染。
  */
 @Service
 public class OrderService {
 
-    private final Map<String, CreateOrderResponse> orders = new ConcurrentHashMap<>();
+    private static final DateTimeFormatter TIME =
+            DateTimeFormatter.ISO_INSTANT.withZone(ZoneId.of("UTC"));
+
+    private final Map<String, CreateOrderResult> orders = new ConcurrentHashMap<>();
     private final AtomicLong sequence = new AtomicLong();
     private final AtomicInteger sideEffectCount = new AtomicInteger();
 
-    public CreateOrderResponse create(CreateOrderRequest request) {
+    public CreateOrderResult create(CreateOrderRequest request) {
         if (request == null || request.product() == null || request.product().isBlank()) {
             throw new ApiException(ErrorCode.BUSINESS_ERROR, "商品名称不能为空");
         }
@@ -41,14 +50,15 @@ public class OrderService {
 
         // —— 以下为唯一的业务副作用：生成订单并落库 ——
         String orderId = "ORD-" + String.format("%08d", sequence.incrementAndGet());
-        CreateOrderResponse response =
-                new CreateOrderResponse(orderId, request.product(), request.quantity(), "CREATED");
-        orders.put(orderId, response);
+        CreateOrderResult result = new CreateOrderResult(
+                orderId, request.product(), request.quantity(), "CREATED",
+                request.amount(), TIME.format(Instant.now()));
+        orders.put(orderId, result);
         sideEffectCount.incrementAndGet();
-        return response;
+        return result;
     }
 
-    public Optional<CreateOrderResponse> findById(String orderId) {
+    public Optional<CreateOrderResult> findById(String orderId) {
         return Optional.ofNullable(orders.get(orderId));
     }
 

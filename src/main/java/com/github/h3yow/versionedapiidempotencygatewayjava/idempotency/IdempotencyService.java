@@ -4,8 +4,10 @@ import com.github.h3yow.versionedapiidempotencygatewayjava.common.ApiException;
 import com.github.h3yow.versionedapiidempotencygatewayjava.common.ErrorCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -20,8 +22,12 @@ import java.util.function.Supplier;
  *     <li>{@link IdempotencyOutcome#KEY_CONFLICT}：同一幂等键携带不同请求负载，拒绝执行。</li>
  * </ul>
  *
- * <p>并发约束：每键一把锁，判定/状态迁移在键锁内串行；业务动作在锁外执行，
+ * <p>并发约束：每键（条带）一把锁，判定/状态迁移在锁内串行；业务动作在锁外执行，
  * 终态以 CAS 写入，因此并发下不重复执行、不覆盖结果、不丢失状态。
+ *
+ * <p>过期处理：到达键若已有终态记录且已过 TTL，在键锁内二次确认后删除，
+ * 该键被当成新请求处理（结论为 EXECUTED，可以重新执行）；IN_PROGRESS 永不过期。
+ * 终态落盘后若超出容量上限，触发一轮有界清理（清理逐键加锁，不与业务键锁嵌套）。
  */
 @Component
 public class IdempotencyService {
@@ -29,14 +35,23 @@ public class IdempotencyService {
     private static final Logger log = LoggerFactory.getLogger(IdempotencyService.class);
 
     private final IdempotencyStore store;
+    private final LongSupplier clock;
 
+    @Autowired
     public IdempotencyService(IdempotencyStore store) {
+        this(store, System::currentTimeMillis);
+    }
+
+    /** 测试可注入时钟，确定性验证 TTL 过期。 */
+    public IdempotencyService(IdempotencyStore store, LongSupplier clock) {
         this.store = store;
+        this.clock = clock;
     }
 
     public <T> IdempotencyResult<T> execute(
             String key, String fingerprint, String requestId, Supplier<T> action) {
         var lock = store.lockFor(key);
+        long now = clock.getAsLong();
 
         // ---- 阶段一：在键锁内判定身份并占位 ----
         lock.lock();
@@ -45,8 +60,16 @@ public class IdempotencyService {
         IdempotencyOutcome outcome;
         try {
             IdempotencyRecord existing = store.get(key);
+
+            // 过期终态：锁内二次确认并删除后，按新请求处理（可重新执行、可换负载）。
+            if (existing != null && store.evictIfExpired(key, existing, now)) {
+                log.info("[idempotency] key={} requestId={} expired-terminal-evicted owner={}",
+                        key, requestId, existing.ownerRequestId());
+                existing = null;
+            }
+
             if (existing == null) {
-                inProgress = IdempotencyRecord.inProgress(fingerprint, requestId);
+                inProgress = IdempotencyRecord.inProgress(fingerprint, requestId, now);
                 IdempotencyRecord raced = store.putIfAbsent(key, inProgress);
                 ownsExecution = raced == null;
                 outcome = IdempotencyOutcome.EXECUTED;
@@ -72,7 +95,7 @@ public class IdempotencyService {
                     case FAILED -> {
                         // 同键同负载：清空失败终态并由本次请求重新占位执行
                         store.remove(key, existing);
-                        inProgress = IdempotencyRecord.inProgress(fingerprint, requestId);
+                        inProgress = IdempotencyRecord.inProgress(fingerprint, requestId, now);
                         IdempotencyRecord raced = store.putIfAbsent(key, inProgress);
                         ownsExecution = raced == null;
                         outcome = IdempotencyOutcome.RETRY_AFTER_FAILURE;
@@ -101,7 +124,7 @@ public class IdempotencyService {
             value = action.get();
             lock.lock();
             try {
-                terminal = inProgress.succeeded(value);
+                terminal = inProgress.succeeded(value, clock.getAsLong());
                 store.compareAndReplace(key, inProgress, terminal);
             } finally {
                 lock.unlock();
@@ -112,7 +135,7 @@ public class IdempotencyService {
                     ? apiEx.errorCode().name() : ErrorCode.BUSINESS_ERROR.name();
             lock.lock();
             try {
-                terminal = inProgress.failed(code, ex.getMessage());
+                terminal = inProgress.failed(code, ex.getMessage(), clock.getAsLong());
                 store.compareAndReplace(key, inProgress, terminal);
             } finally {
                 lock.unlock();
@@ -124,6 +147,13 @@ public class IdempotencyService {
         }
         log.info("[idempotency] key={} requestId={} final-status={} outcome={}",
                 key, requestId, terminal.status(), outcome);
+
+        // ---- 阶段三：超容量时做一轮有界清理（逐键加锁，不与业务键锁嵌套）----
+        if (store.requiresMaintenance()) {
+            IdempotencyStore.PurgeOutcome purge = store.purge(clock.getAsLong());
+            log.info("[idempotency] bounded-purge expiredEvicted={} capacityEvicted={} remaining={}",
+                    purge.expiredEvicted(), purge.capacityEvicted(), purge.remaining());
+        }
         return result;
     }
 }
